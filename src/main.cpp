@@ -54,26 +54,27 @@ int main(int argc, char *argv[]) {
         }
       }
     } else {
-      std::cerr << "Неизвестный параметр: " << s << std::endl;
+      std::cerr << "Unknown parameter: " << s << std::endl;
       return 2;
     }
     ++i;
   }
 
+  if (!install_signal_handlers())
+    return 1;
+
   std::cout << "Config is set. Port = " << cfg.port
             << " Threads = " << cfg.threads << std::endl;
 
-  // temp testing creating listening socket
   int fd = create_listen_socket(cfg.port);
-
-  if (fd == -1) {
+  if (fd == -1)
     return 1;
-  } else {
-    std::cout << fd << std::endl;
-    sleep(30);
-    std::cout << "Closing fd" << std::endl;
-    close(fd);
-  }
 
+  while (!stop_requested()) {
+    sleep(1);
+  }
+  close(fd);
+
+  std::cout << "\nServer stopped correctly" << std::endl;
   return 0;
 }

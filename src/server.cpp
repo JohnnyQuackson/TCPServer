@@ -1,11 +1,55 @@
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
+#include <signal.h>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+
+static std::atomic<bool> stop_signal = false;
+
+static void handle_stop_signal(int signo) {
+  if (signo == SIGINT || signo == SIGTERM)
+    stop_signal.store(true);
+}
+
+bool stop_requested() { return stop_signal.load(); }
+
+bool install_signal_handlers() {
+  struct sigaction sa {};
+
+  sa.sa_handler = handle_stop_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+
+  if (sigaction(SIGINT, &sa, nullptr) == -1) {
+    int error_code = errno;
+    std::string error_message = strerror(error_code);
+    std::cerr << "SIGINT: " << error_message << std::endl;
+    return false;
+  }
+
+  if (sigaction(SIGTERM, &sa, nullptr) == -1) {
+    int error_code = errno;
+    std::string error_message = strerror(error_code);
+    std::cerr << "SIGTERM: " << error_message << std::endl;
+    return false;
+  }
+
+  sa.sa_handler = SIG_IGN;
+
+  if (sigaction(SIGPIPE, &sa, nullptr) == -1) {
+    int error_code = errno;
+    std::string error_message = strerror(error_code);
+    std::cerr << "SIGPIPE: " << error_message << std::endl;
+    return false;
+  }
+
+  return true;
+}
 
 int create_listen_socket(std::uint16_t port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);

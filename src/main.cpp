@@ -1,8 +1,10 @@
+#include "server.h" //temp
 #include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <unistd.h> //temp
 
 struct Config {
   std::uint16_t port = 8080;
@@ -60,5 +62,18 @@ int main(int argc, char *argv[]) {
 
   std::cout << "Config is set. Port = " << cfg.port
             << " Threads = " << cfg.threads << std::endl;
+
+  // temp testing creating listening socket
+  int fd = create_listen_socket(cfg.port);
+
+  if (fd == -1) {
+    return 1;
+  } else {
+    std::cout << fd << std::endl;
+    sleep(30);
+    std::cout << "Closing fd" << std::endl;
+    close(fd);
+  }
+
   return 0;
 }

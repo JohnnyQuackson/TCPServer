@@ -1,13 +1,88 @@
+#include "server.h"
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <iostream>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
+#include <system_error>
 #include <unistd.h>
+
+static void error_printer(int error_code, std::string_view error_source) {
+  std::string error_message = std::generic_category().message(error_code);
+  std::cerr << std::format("Error in {}: {}\n", error_source, error_message);
+  return;
+}
+
+WaitStatus wait_readable(int fd, int timeout_ms) {
+  pollfd pfd{};
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+
+  const int result = poll(&pfd, 1, timeout_ms);
+
+  if (result > 0) {
+    if (pfd.revents & POLLNVAL) {
+      return WaitStatus::Error;
+    }
+
+    return WaitStatus::Readable;
+  }
+  if (result == -1) {
+    int error_code = errno;
+    if (error_code == EINTR) {
+      return WaitStatus::Interrupted;
+    }
+    error_printer(error_code, "poll");
+
+    return WaitStatus::Error;
+  }
+  return WaitStatus::Timeout;
+}
+
+ReadStatus read_some(int fd, std::string &buffer) {
+  char tmp[4096];
+
+  ssize_t bytes_read = read(fd, tmp, sizeof(tmp));
+  if (bytes_read == -1) {
+    if (errno == EINTR) {
+      return read_some(fd, buffer);
+    }
+    return ReadStatus::Error;
+  }
+  if (bytes_read == 0) {
+    return ReadStatus::Closed;
+  }
+
+  buffer.append(tmp, bytes_read);
+  return ReadStatus::Data;
+}
+
+bool send_all(int fd, std::string_view data) {
+  size_t sent = 0;
+  while (sent < data.size()) {
+    ssize_t sent_now =
+        send(fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+    if (sent_now == -1) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (sent_now == 0) {
+      return false;
+    }
+    sent += static_cast<size_t>(sent_now);
+  }
+  return true;
+}
 
 static std::atomic<bool> stop_signal = false;
 
@@ -26,25 +101,19 @@ bool install_signal_handlers() {
   sa.sa_flags = 0;
 
   if (sigaction(SIGINT, &sa, nullptr) == -1) {
-    int error_code = errno;
-    std::string error_message = strerror(error_code);
-    std::cerr << "SIGINT: " << error_message << std::endl;
+    error_printer(errno, "SIGINT");
     return false;
   }
 
   if (sigaction(SIGTERM, &sa, nullptr) == -1) {
-    int error_code = errno;
-    std::string error_message = strerror(error_code);
-    std::cerr << "SIGTERM: " << error_message << std::endl;
+    error_printer(errno, "SIGTERM");
     return false;
   }
 
   sa.sa_handler = SIG_IGN;
 
   if (sigaction(SIGPIPE, &sa, nullptr) == -1) {
-    int error_code = errno;
-    std::string error_message = strerror(error_code);
-    std::cerr << "SIGPIPE: " << error_message << std::endl;
+    error_printer(errno, "SIGPIPE");
     return false;
   }
 
@@ -55,9 +124,7 @@ int create_listen_socket(std::uint16_t port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
 
   if (fd == -1) {
-    int error_code = errno;
-    std::string error_message = strerror(error_code);
-    std::cerr << "socket failed: " << error_message << std::endl;
+    error_printer(errno, "socket");
     return -1;
   }
 
@@ -65,8 +132,7 @@ int create_listen_socket(std::uint16_t port) {
   if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
     int error_code = errno;
     close(fd);
-    std::string error_message = strerror(error_code);
-    std::cerr << "setsockopt failed: " << error_message << std::endl;
+    error_printer(error_code, "setsockopt");
     return -1;
   }
 
@@ -78,17 +144,14 @@ int create_listen_socket(std::uint16_t port) {
   if (bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == -1) {
     int error_code = errno;
     close(fd);
-    std::string error_message = strerror(error_code);
-    std::cerr << "bind failed on port " << port << ": " << error_message
-              << std::endl;
+    error_printer(error_code, std::format("bind on port {}", port));
     return -1;
   }
 
   if (listen(fd, SOMAXCONN) == -1) {
     int error_code = errno;
     close(fd);
-    std::string error_message = strerror(error_code);
-    std::cerr << "listen failed: " << error_message << std::endl;
+    error_printer(error_code, "listen");
     return -1;
   }
 

@@ -1,10 +1,11 @@
-#include "server.h" //temp
+#include "server.h"
 #include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <string>
-#include <unistd.h> //temp
+#include <sys/socket.h>
+#include <unistd.h>
 
 struct Config {
   std::uint16_t port = 8080;
@@ -70,9 +71,44 @@ int main(int argc, char *argv[]) {
   if (fd == -1)
     return 1;
 
-  while (!stop_requested()) {
-    sleep(1);
+  int client_fd = accept(fd, nullptr, nullptr);
+
+  if (client_fd == -1) {
+    close(fd);
+    return 1;
   }
+  std::string buffer;
+
+  while (true) {
+
+    WaitStatus wait_status = wait_readable(client_fd, 5000);
+    if (wait_status == WaitStatus::Readable) {
+      ReadStatus read_status = read_some(client_fd, buffer);
+      if (read_status == ReadStatus::Data) {
+        bool sent_status = send_all(client_fd, buffer);
+        if (sent_status == false) {
+          int error_code = errno;
+          std::string error_message = strerror(error_code);
+          std::cerr << "send_all failed: " << error_message << std::endl;
+        }
+        buffer.clear();
+      }
+      if (read_status == ReadStatus::Error ||
+          read_status == ReadStatus::Closed) {
+        break;
+      }
+    }
+    if (wait_status == WaitStatus::Interrupted) {
+      if (stop_requested()) {
+        break;
+      }
+    }
+    if (wait_status == WaitStatus::Error ||
+        wait_status == WaitStatus::Timeout) {
+      break;
+    }
+  }
+  close(client_fd);
   close(fd);
 
   std::cout << "\nServer stopped correctly" << std::endl;
